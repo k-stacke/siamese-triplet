@@ -4,6 +4,39 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torch.utils.data.sampler import BatchSampler
 
+class ImagePatchesDataset(Dataset):
+    def __init__(self, dataframe, image_dir, transform=None):
+        self.dataframe = dataframe
+        self.image_dir = image_dir
+        self.transform = transform
+
+        # self.label_enum = {'TUMOR': 1, 'NONTUMOR': 0}
+        # self.labels = list(dataframe.label.apply(lambda x: self.label_enum[x]))
+
+    def __len__(self):
+        return len(self.dataframe.index)
+
+    def __getitem__(self, index):
+        row = self.dataframe.iloc[index]
+        # Get images
+        path1 = f"{self.image_dir}/{row.filename}"
+        path2 = f"{self.image_dir}/{row.filename_2}"
+        try:
+            image1 = Image.open(path1)
+            image2 = Image.open(path2)
+        except IOError:
+            print(f"could not open {path1} or {path2}")
+            return None
+
+        if self.transform is not None:
+            img1 = self.transform(image1)
+            img2 = self.transform(image2)
+        else:
+            raise NotImplementedError
+
+        label = row.label
+
+        return img1, img2, label, row.patch_id, row.slide_id
 
 class SiameseMNIST(Dataset):
     """
@@ -18,15 +51,15 @@ class SiameseMNIST(Dataset):
         self.transform = self.mnist_dataset.transform
 
         if self.train:
-            self.train_labels = self.mnist_dataset.train_labels
-            self.train_data = self.mnist_dataset.train_data
+            self.train_labels = self.mnist_dataset.targets
+            self.train_data = self.mnist_dataset.data
             self.labels_set = set(self.train_labels.numpy())
             self.label_to_indices = {label: np.where(self.train_labels.numpy() == label)[0]
                                      for label in self.labels_set}
         else:
             # generate fixed pairs for testing
-            self.test_labels = self.mnist_dataset.test_labels
-            self.test_data = self.mnist_dataset.test_data
+            self.test_labels = self.mnist_dataset.targets
+            self.test_data = self.mnist_dataset.data
             self.labels_set = set(self.test_labels.numpy())
             self.label_to_indices = {label: np.where(self.test_labels.numpy() == label)[0]
                                      for label in self.labels_set}

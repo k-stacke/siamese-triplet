@@ -1,7 +1,61 @@
+import random
 from itertools import combinations
 
 import numpy as np
+from PIL import ImageFilter
+
 import torch
+import torch.nn as nn
+from torchvision import transforms
+
+
+class GaussianBlur(object):
+    """Gaussian blur augmentation: https://github.com/facebookresearch/moco/"""
+
+    def __init__(self, sigma=[.1, 2.]):
+        self.sigma = sigma
+
+    def __call__(self, x):
+        sigma = random.uniform(self.sigma[0], self.sigma[1])
+        x = x.filter(ImageFilter.GaussianBlur(radius=sigma))
+        return x
+
+class FixedRandomRotation:
+    """Rotate by one of the given angles."""
+    def __init__(self, angles):
+        self.angles = angles
+
+    def __call__(self, x):
+        angle = random.choice(self.angles)
+        return transforms.functional.rotate(x, angle)
+
+
+def distribute_over_GPUs(args, model):
+    ## distribute over GPUs
+    model = nn.DataParallel(model)
+    num_GPU = torch.cuda.device_count()
+    args.batch_size = args.batch_size * num_GPU
+
+    model = model.to(args.device)
+    print("Let's use", num_GPU, "GPUs!")
+
+    return model, num_GPU
+
+
+def reload_weights(args, model, optimizer):
+    # Load the pretrained model
+    checkpoint = torch.load(args.load_checkpoint_dir, map_location="cpu")
+
+    ## reload weights for training of the linear classifier
+    model.load_state_dict(checkpoint['model'])
+
+    ## reload weights and optimizers for continuing training
+    if args.start_epoch > 0:
+        print("Continuing training from epoch ", args.start_epoch)
+
+        optimizer.load_state_dict(checkpoint['optimizer'])
+
+    return model, optimizer
 
 
 def pdist(vectors):

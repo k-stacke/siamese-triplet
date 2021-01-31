@@ -92,7 +92,7 @@ def setup(args):
 
 def main():
     """ Main """
-    neptune.init('k-stacke/sandbox')
+    neptune.init('k-stacke/self-supervised')
 
     # Arguments
     args = parser.parse_args()

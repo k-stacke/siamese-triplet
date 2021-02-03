@@ -12,13 +12,13 @@ from utils import FixedRandomRotation, GaussianBlur
 def get_dataloader(args):
 
     if args.dataset == 'mnist':
-        train_loader, test_loader = get_mnist_dataloader(args)
+        dataloaders = get_mnist_dataloader(args)
     elif args.dataset == 'cam':
-        train_loader, test_loader = get_cam_dataloader(args)
+        dataloaders = get_cam_dataloader(args)
     else:
         raise NotImplementedError()
 
-    return train_loader, test_loader
+    return dataloaders
 
 
 def get_mnist_dataloader(args):
@@ -49,8 +49,11 @@ def get_mnist_dataloader(args):
     siamese_test_loader = DataLoader(siamese_test_dataset,
                                      batch_size=batch_size,
                                      shuffle=False, **kwargs)
+    dataloaders = {}
+    dataloaders['train'] = siamese_train_loader
+    dataloaders['test'] = siamese_test_loader
 
-    return siamese_train_loader, siamese_test_loader
+    return dataloaders
 
 
 def get_cam_dataloader(args):
@@ -83,40 +86,51 @@ def get_cam_dataloader(args):
                                  (0.229, 0.224, 0.225))])
     }
 
-    train_df, val_df, test_df = get_dataframes(args)
+    train_df, valid_df, test_df, contrast_df = get_dataframes(args)
 
+    dataloaders = {}
+
+    # ------ TRAIN ----------
     print("training patches: ", train_df.groupby('label').size())
-    print("Validation patches: ", val_df.groupby('label').size())
-    print("Test patches: ", test_df.groupby('label').size())
-
-    print("Saving training/val set to file")
     train_df.to_csv(f'{args.save_dir}/training_patches.csv', index=False)
-    val_df.to_csv(f'{args.save_dir}/val_patches.csv', index=False)
-
-
     train_dataset = ImagePatchesDataset(dataframe=train_df,
                         image_dir=args.dataset_path,
+                        contrast_df=contrast_df,
                         transform=transf['train'])
-
-
-    val_dataset = ImagePatchesDataset(dataframe=val_df,
-                        image_dir=args.dataset_path,
-                        transform=transf['test'])
-
-    # test_dataset = ImagePatchesDataset(dataframe=test_df,
-    #                         image_dir=args.dataset_path,
-    #                         transform=transf['test'])
 
     train_dataloader = DataLoader(train_dataset, shuffle=True,
                                  num_workers=args.num_workers,
                                  pin_memory=True, drop_last=True,
                                  batch_size=args.batch_size)
-    val_dataloader = DataLoader(val_dataset, shuffle=False,
+    dataloaders['train'] = train_dataloader
+
+    # ------- VALIDATION ------------
+    if valid_df:
+        print("Validation patches: ", valid_df.groupby('label').size())
+        valid_df.to_csv(f'{args.save_dir}/val_patches.csv', index=False)
+        valid_dataset = ImagePatchesDataset(dataframe=valid_df,
+                        image_dir=args.dataset_path,
+                        transform=transf['test'])
+
+        valid_dataloader = DataLoader(valid_dataset, shuffle=False,
                                  num_workers=args.num_workers,
                                  pin_memory=True, drop_last=True,
                                  batch_size=args.batch_size)
+        dataloaders['valid'] = valid_dataloader
 
-    return train_dataloader, val_dataloader
+    # ---------- TEST -------------
+    if test_df:
+        print("Test patches: ", test_df.groupby('label').size())
+        test_dataset = ImagePatchesDataset(dataframe=test_df,
+                            image_dir=args.dataset_path,
+                            transform=transf['test'])
+        test_dataloader = DataLoader(test_dataset, shuffle=False,
+                                 num_workers=args.num_workers,
+                                 pin_memory=True, drop_last=True,
+                                 batch_size=args.batch_size)
+        dataloaders['test'] = test_dataloader
+
+    return dataloaders
 
 def clean_data(img_dir, dataframe):
     """ Clean the data """
@@ -126,24 +140,32 @@ def clean_data(img_dir, dataframe):
             dataframe = dataframe.drop(idx)
     return dataframe
 
-def get_dataframes(opt):
-    if os.path.isfile(opt.training_data_csv):
-        print("reading csv file: ", opt.training_data_csv)
-        train_df = pd.read_csv(opt.training_data_csv)
-    else:
-        raise Exception(f'Cannot find file: {opt.training_data_csv}')
+def read_file(filename):
+    if not os.path.isfile(filename):
+        raise Exception(f'Cannot find file: {filename}')
 
-    if os.path.isfile(opt.test_data_csv):
-        print("reading csv file: ", opt.test_data_csv)
-        test_df = pd.read_csv(opt.test_data_csv)
+    if filename[-3:] == 'csv':
+        print("reading csv file: ", filename)
+        df = pd.read_csv(filename)
     else:
-        raise Exception(f'Cannot find file: {opt.test_data_csv}')
+        print("reading parquet file: ", filename)
+        df = pd.read_parquet(filename)
+
+    return df
+
+
+def get_dataframes(opt):
+    train_df = read_file(opt.training_data_file)
+    contrast_train_df = read_file(opt.contrasting_training_data_file) if opt.contrasting_training_data_file else None
+    test_df = read_file(opt.test_data_file) if opt.test_data_file else None
+    val_df = read_file(opt.validation_data_file) if opt.validation_data_file else None
 
     train_df = train_df.sample(100)
-    test_df = test_df.sample(100)
-
     train_df = clean_data(opt.dataset_path, train_df)
-    test_df = clean_data(opt.dataset_path, test_df)
+
+    if test_df:
+        test_df = test_df.sample(100)
+        test_df = clean_data(opt.dataset_path, test_df)
 
 
     if opt.trainingset_split:
@@ -165,15 +187,7 @@ def get_dataframes(opt):
         val_df = train_df[train_df.slide_id.isin(valid_req_ids)] # First, take the slides for validation
         train_df = train_df[train_df.slide_id.isin(train_req_ids)] # Update train_df
 
-    else:
-        if os.path.isfile(opt.validation_data_csv):
-            print("reading csv file: ", opt.validation_data_csv)
-            val_df = pd.read_csv(opt.validation_data_csv)
-            val_df = val_df.sample(100)
-        else:
-            raise Exception(f'Cannot find file: {opt.test_data_csv}')
-
-    if opt.balanced_validation_set:
+    if (opt.balanced_validation_set) and (val_df is not None):
         print('Use uniform validation set')
         samples_to_take = val_df.groupby('label').size().min()
         val_df = pd.concat([val_df[val_df.label == label].sample(samples_to_take) for label in val_df.label.unique()])
@@ -182,4 +196,4 @@ def get_dataframes(opt):
         samples_to_take = test_df.groupby('label').size().min()
         test_df = pd.concat([test_df[test_df.label == label].sample(samples_to_take) for label in test_df.label.unique()])
 
-    return train_df, val_df, test_df
+    return train_df, val_df, test_df, contrast_train_df

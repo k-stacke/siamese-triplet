@@ -9,16 +9,10 @@ class ResNet(nn.Module):
     def __init__(self, feature_dim=128):
         super(ResNet, self).__init__()
 
-        self.f = []
-        for _, module in resnet50(pretrained=False).named_children():
-            # if name == 'conv1':
-            #     module = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
-            if not isinstance(module, nn.Linear) and not isinstance(module, nn.MaxPool2d):
-                self.f.append(module)
-        # encoder
-        self.f = nn.Sequential(*self.f)
+        self.f = resnet50(pretrained=False)
+
         # projection head
-        self.g = nn.Sequential(nn.Linear(2048, 512, bias=False),
+        self.f.fc = nn.Sequential(nn.Linear(2048, 512, bias=False),
                                nn.BatchNorm1d(512),
                                nn.ReLU(inplace=True),
                                nn.Linear(512, feature_dim, bias=True))
@@ -26,10 +20,7 @@ class ResNet(nn.Module):
     # @amp.autocast()
     def forward(self, x):
         x = self.f(x)
-        feature = torch.flatten(x, start_dim=1)
-        out = self.g(feature)
-        # return F.normalize(feature, dim=-1), F.normalize(out, dim=-1)
-        return out# F.normalize(out, dim=-1)
+        return x
 
 
 class EmbeddingNet(nn.Module):
@@ -70,22 +61,33 @@ class EmbeddingNetL2(EmbeddingNet):
         return self.forward(x)
 
 
+class Identity(nn.Module):
+    def __init__(self):
+        super(Identity, self).__init__()
+
+    def forward(self, x):
+        return x
+
 class ClassificationNet(nn.Module):
     def __init__(self, embedding_net, n_classes):
         super(ClassificationNet, self).__init__()
         self.embedding_net = embedding_net
-        self.n_classes = n_classes
-        self.nonlinear = nn.PReLU()
-        self.fc1 = nn.Linear(2, n_classes)
 
+        # Remove fc layer
+        self.embedding_net.fc = Identity()
+
+        self.n_classes = n_classes
+        self.fc = nn.Linear(2048, n_classes)
+
+    @amp.autocast()
     def forward(self, x):
-        output = self.embedding_net(x)
-        output = self.nonlinear(output)
-        scores = F.log_softmax(self.fc1(output), dim=-1)
-        return scores
+        x = self.embedding_net(x)
+        feature = torch.flatten(x, start_dim=1)
+        out = self.fc(feature)
+        return out
 
     def get_embedding(self, x):
-        return self.nonlinear(self.embedding_net(x))
+        return self.embedding_net(x)
 
 
 class SiameseNet(nn.Module):

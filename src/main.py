@@ -54,13 +54,17 @@ parser.add_argument('--grey_p', type=float, default=0.2,
 
 
 # CAMELYON parameters
-parser.add_argument('--training_data_csv', required=True, type=str,
+parser.add_argument('--training_data_file', required=True, type=str,
                     help='Path to file to use to read training data')
-parser.add_argument('--test_data_csv', required=True, type=str,
+parser.add_argument('--contrasting_training_data_file', required=False, type=str,
+                    default=None,
+                    help='Path to file to use to read contrasting training data')
+parser.add_argument('--test_data_file', required=False, type=str,
+                    default=None,
                     help='Path to file to use to read test data')
 # For validation set, need to specify either csv or train/val split ratio
-group_validationset = parser.add_mutually_exclusive_group(required=True)
-group_validationset.add_argument('--validation_data_csv', type=str,
+group_validationset = parser.add_mutually_exclusive_group(required=False)
+group_validationset.add_argument('--validation_data_file', type=str,
                                  help='Path to file to use to read validation data')
 group_validationset.add_argument('--trainingset_split', type=float,
                                  help='If not none, training csv with be split in train/val. Value between 0-1')
@@ -92,7 +96,7 @@ def setup(args):
 
 def main():
     """ Main """
-    neptune.init('k-stacke/self-supervised')
+    # neptune.init('k-stacke/self-supervised')
 
     # Arguments
     args = parser.parse_args()
@@ -106,8 +110,8 @@ def main():
         config = config[config.find('\n')+1:]
         logs.write('{}'.format(config))
 
-    exp = neptune.create_experiment(name='siamese', params=args.__dict__, tags=['siamese'])
-
+    # exp = neptune.create_experiment(name='siamese', params=args.__dict__, tags=['siamese'])
+    exp=None
     device, args = setup(args)
 
     # Set up the network and training parameters
@@ -128,20 +132,20 @@ def main():
     model, _ = distribute_over_GPUs(args, model)
 
     # Get dataloaders
-    train_loader, val_loader = get_dataloader(args)
+    dataloaders = get_dataloader(args)
     # Get loss fn
     margin = 1.
     loss_fn = ContrastiveLoss(margin)
 
     #scheduler = lr_scheduler.StepLR(optimizer, 8, gamma=0.1, last_epoch=-1)
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer,
-        T_max=len(train_loader), eta_min=0, last_epoch=-1)
+        T_max=len(dataloaders['train']), eta_min=0, last_epoch=-1)
 
     # Get amp scaler
     scaler = amp.GradScaler()
 
     print('Training model')
-    fit(args, train_loader, val_loader, model, loss_fn, optimizer, scheduler,
+    fit(args, dataloaders['train'], model, loss_fn, optimizer, scheduler,
         scaler, n_epochs=args.n_epochs,
         device=device, log_interval=50, metrics=[], exp=exp)
 

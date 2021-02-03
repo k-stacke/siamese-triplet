@@ -1,14 +1,20 @@
 import numpy as np
 from PIL import Image
+import random
 
+import torch
 from torch.utils.data import Dataset
 from torch.utils.data.sampler import BatchSampler
 
 class ImagePatchesDataset(Dataset):
-    def __init__(self, dataframe, image_dir, transform=None):
+    def __init__(self, dataframe, image_dir, contrast_df=None, transform=None):
         self.dataframe = dataframe
+        self.contrast_df = contrast_df
         self.image_dir = image_dir
         self.transform = transform
+
+        if self.contrast_df is not None:
+            self.patchid_to_index = {row.patch_id: row.name for _, row in self.contrast_df.iterrows()}
 
         # self.label_enum = {'TUMOR': 1, 'NONTUMOR': 0}
         # self.labels = list(dataframe.label.apply(lambda x: self.label_enum[x]))
@@ -20,23 +26,37 @@ class ImagePatchesDataset(Dataset):
         row = self.dataframe.iloc[index]
         # Get images
         path1 = f"{self.image_dir}/{row.filename}"
-        path2 = f"{self.image_dir}/{row.filename_2}"
+
+        if self.contrast_df is not None:
+            # some are missing nonsimilar patches
+            label = 1 if len(row.nonsimilar) == 0 else random.choice([0,1])
+            if label == 0:
+                contrast_patch_id = random.choice(row.nonsimilar)
+            else:
+                contrast_patch_id = random.choice(row.similar)
+
+            contrast_row = self.contrast_df.loc[self.patchid_to_index[contrast_patch_id]]
+            path2 = f"{self.image_dir}/{contrast_row.filename}"
+
         try:
-            image1 = Image.open(path1)
-            image2 = Image.open(path2)
+            img1 = Image.open(path1)
         except IOError:
-            print(f"could not open {path1} or {path2}")
-            return None
+            raise IOError(f"could not open {path1}")
+        if self.contrast_df is not None:
+            try:
+                img2 = Image.open(path2)
+            except IOError:
+                raise IOError(f"could not open {path2}")
 
         if self.transform is not None:
-            img1 = self.transform(image1)
-            img2 = self.transform(image2)
+            img1 = self.transform(img1)
+            if self.contrast_df is not None:
+                img2 = self.transform(img2)
+                img1 = torch.cat([img1, img2], dim=0)
         else:
             raise NotImplementedError
 
-        label = row.label
-
-        return img1, img2, label, row.patch_id, row.slide_id
+        return img1, label, row.patch_id, row.slide_id
 
 class SiameseMNIST(Dataset):
     """

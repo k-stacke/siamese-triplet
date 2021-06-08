@@ -16,6 +16,9 @@ class ImagePatchesDataset(Dataset):
         if self.contrast_df is not None:
             self.patchid_to_index = {row.patch_id: row.name for _, row in self.contrast_df.iterrows()}
 
+        # Ugly workarounf to fix invalid images
+        self.invalid_ids = pd.read_csv(f'{image_dir}/triplet_invalid_ids.csv')
+
         # self.label_enum = {'TUMOR': 1, 'NONTUMOR': 0}
         # self.labels = list(dataframe.label.apply(lambda x: self.label_enum[x]))
 
@@ -32,8 +35,12 @@ class ImagePatchesDataset(Dataset):
             label = 1 if len(row.nonsimilar) == 0 else random.choice([0,1])
             if label == 0:
                 contrast_patch_id = random.choice(row.nonsimilar)
+                while contrast_patch_id in self.invalid_ids.patch_ids:
+                    contrast_patch_id = random.choice(row.nonsimilar)
             else:
                 contrast_patch_id = random.choice(row.similar)
+                while contrast_patch_id in self.invalid_ids.patch_ids:
+                    contrast_patch_id = random.choice(row.nonsimilar)
 
             contrast_row = self.contrast_df.loc[self.patchid_to_index[contrast_patch_id]]
             path2 = f"{self.image_dir}/{contrast_row.filename}"
